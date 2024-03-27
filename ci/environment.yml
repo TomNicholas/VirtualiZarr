@@ -10,6 +10,7 @@ dependencies:
   - netcdf4
   - pydantic
   - pooch
+  - fsspec
   - pytest
   - pytest-cov
   - ruff
