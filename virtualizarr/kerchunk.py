@@ -20,7 +20,7 @@ KerchunkArrRefs = NewType(
 
 
 def read_kerchunk_references_from_file(
-    filepath: str, filetype: Optional[str]
+    filepath: str, filetype: Optional[str], filesystem: Optional[str]
 ) -> KerchunkStoreRefs:
     """
     Read a single legacy file and return kerchunk references to its contents.
@@ -37,6 +37,9 @@ def read_kerchunk_references_from_file(
     if filetype is None:
         filetype = _automatically_determine_filetype(filepath)
 
+    if filesystem is None:
+        filesystem = filepath
+
     if filetype.lower() == "netcdf3":
         from kerchunk.netCDF3 import NetCDF3ToZarr
         refs = NetCDF3ToZarr(filepath).translate()
@@ -44,7 +47,7 @@ def read_kerchunk_references_from_file(
     elif filetype.lower() == "netcdf4":
         from kerchunk.hdf import SingleHdf5ToZarr
 
-        refs = SingleHdf5ToZarr(filepath).translate()
+        refs = SingleHdf5ToZarr(filesystem, filepath).translate()
     elif filetype == "grib":
         # TODO Grib files should be handled as a DataTree object
         # see https://github.com/TomNicholas/VirtualiZarr/issues/11

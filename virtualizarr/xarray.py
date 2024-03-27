@@ -50,17 +50,25 @@ def open_virtual_dataset(
         Currently can only be ManifestArray, but once VirtualZarrArray is implemented the default should be changed to that.
     """
 
+    if filepath.startswith("s3://"):
+        import s3fs
+        fs_s3 = s3fs.S3FileSystem(anon=False)
+        filesystem = fs_s3.open(filepath, mode='rb')
+    else:
+        filesystem = filepath
+
     # this is the only place we actually always need to use kerchunk directly
     vds_refs = kerchunk.read_kerchunk_references_from_file(
         filepath=filepath,
         filetype=filetype,
+        filesystem=filesystem,
     )
 
     if indexes is None:
         # add default indexes by reading data from file
         # TODO we are reading a bunch of stuff we know we won't need here, e.g. all of the data variables...
         # TODO it would also be nice if we could somehow consolidate this with the reading of the kerchunk references
-        ds = xr.open_dataset(filepath)
+        ds = xr.open_dataset(filesystem)
         indexes = ds.xindexes
         ds.close()
 
@@ -140,7 +148,8 @@ def separate_coords(
     """
     Try to generate a set of coordinates that won't cause xarray to automatically build a pandas.Index for the 1D coordinates.
 
-    I thought this should be easy but it was actually really hard - in the end I had to checkout xarray v2023.08.0, the last one before #8107 was merged.
+    I thought this should be easy but it was actually really hard - in the end I had to checkout xarray v2023.08.0, the last one before https://github.com/pydata/xarray/pull/8107 was merged.
+    Without that version of xarray, this results in `NotImplementedError: ManifestArrays can't be converted into numpy arrays or pandas Index objects`
     """
 
     # this would normally come from CF decoding, let's hope the fact we're skipping that doesn't cause any problems...
@@ -159,7 +168,6 @@ def separate_coords(
                 coord_vars[name] = var
         else:
             data_vars[name] = var
-
     coords = xr.Coordinates(coord_vars, indexes=indexes)
 
     return data_vars, coords
