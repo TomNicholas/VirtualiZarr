@@ -1,4 +1,5 @@
 import itertools
+import json
 import re
 from typing import Any, Iterable, Iterator, List, Mapping, Tuple, Union, cast
 
@@ -115,7 +116,8 @@ class ChunkManifest(BaseModel):
 
     def to_zarr_json(self, filepath: str) -> None:
         """Write a ChunkManifest to a Zarr manifest.json file."""
-        raise NotImplementedError()
+        with open(filepath, "w") as json_file:
+            json.dump(self.dict(), json_file, indent=4, separators=(", ", ": "))
 
     @classmethod
     def from_kerchunk_chunk_dict(cls, kerchunk_chunk_dict) -> "ChunkManifest":

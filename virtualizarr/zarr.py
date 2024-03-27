@@ -1,7 +1,10 @@
+import json
+from pathlib import Path
 from typing import Any, Literal, NewType, Optional, Tuple, Union
 
 import numpy as np
 import ujson  # type: ignore
+import xarray as xr
 from pydantic import BaseModel, ConfigDict, field_validator
 
 # TODO replace these with classes imported directly from Zarr? (i.e. Zarr Object Models)
@@ -82,11 +85,18 @@ class ZArray(BaseModel):
             zarr_format=int(decoded_arr_refs_zarray["zarr_format"]),
         )
 
-    def to_kerchunk_json(self) -> str:
+    def dict(self) -> dict[str, Any]:
         zarray_dict = dict(self)
-        # TODO not sure if there is a better way to get the '<i4' style representation of the dtype out
-        zarray_dict["dtype"] = zarray_dict["dtype"].descr[0][1]
-        return ujson.dumps(zarray_dict)
+        zarray_dict["dtype"] = encode_dtype(zarray_dict["dtype"])
+        return zarray_dict
+
+    def to_kerchunk_json(self) -> str:
+        return ujson.dumps(self.dict())
+
+
+def encode_dtype(dtype: np.dtype) -> str:
+    # TODO not sure if there is a better way to get the '<i4' style representation of the dtype out
+    return dtype.descr[0][1]
 
 
 def ceildiv(a: int, b: int) -> int:
@@ -96,3 +106,67 @@ def ceildiv(a: int, b: int) -> int:
     See https://stackoverflow.com/questions/14822184/is-there-a-ceiling-equivalent-of-operator-in-python
     """
     return -(a // -b)
+
+
+def dataset_to_zarr(ds: xr.Dataset, storepath: str) -> None:
+    """
+    Write an xarray dataset whose variables wrap ManifestArrays to a Zarr store, writing chunk references into manifest.json files.
+
+    Not very useful until some implementation of a Zarr reader can actually read these manifest.json files.
+    See https://github.com/zarr-developers/zarr-specs/issues/287
+    """
+
+    from virtualizarr.manifests import ManifestArray
+
+    _storepath = Path(storepath)
+    Path.mkdir(_storepath, exist_ok=False)
+
+    # TODO should techically loop over groups in a tree but a dataset corresponds to only one group
+    # TODO does this mean we need a group kwarg?
+
+    consolidated_metadata: dict = {"metadata": {}}
+
+    # write top-level .zattrs
+    with open(_storepath / ".zattrs", "w") as json_file:
+        json.dump(ds.attrs, json_file, indent=4, separators=(", ", ": "))
+    consolidated_metadata[".zattrs"] = ds.attrs
+
+    # write .zgroup
+    with open(_storepath / ".zgroup", "w") as json_file:
+        json.dump({"zarr_format": 2}, json_file, indent=4, separators=(", ", ": "))
+    consolidated_metadata[".zgroup"] = {"zarr_format": 2}
+
+    for name, var in ds.variables.items():
+        array_dir = _storepath / name
+        marr = var.data
+
+        # TODO move this check outside the writing loop so we don't write an incomplete store on failure?
+        if not isinstance(marr, ManifestArray):
+            raise TypeError(
+                "Only xarray objects wrapping ManifestArrays can be written to zarr using this method, "
+                f"but variable {name} wraps an array of type {type(marr)}"
+            )
+
+        Path.mkdir(array_dir, exist_ok=False)
+
+        # write the chunk references into a manifest.json file
+        marr.manifest.to_zarr_json(array_dir / "manifest.json")
+
+        # write each .zarray
+        with open(array_dir / ".zarray", "w") as json_file:
+            json.dump(marr.zarray.dict(), json_file, indent=4, separators=(", ", ": "))
+
+        # write each .zattrs
+        zattrs = var.attrs.copy()
+        zattrs["_ARRAY_DIMENSIONS"] = list(var.dims)
+        with open(array_dir / ".zattrs", "w") as json_file:
+            json.dump(zattrs, json_file, indent=4, separators=(", ", ": "))
+
+        # record this info to include in the overall .zmetadata
+        consolidated_metadata["metadata"][name + "/.zarray"] = marr.zarray.dict()
+        consolidated_metadata["metadata"][name + "/.zattrs"] = zattrs
+
+    # write store-level .zmetadata
+    consolidated_metadata["zarr_consolidated_format"] = 1
+    with open(_storepath / ".zmetadata", "w") as json_file:
+        json.dump(consolidated_metadata, json_file, indent=4, separators=(", ", ": "))
