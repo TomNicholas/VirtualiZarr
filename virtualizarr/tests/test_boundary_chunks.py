@@ -9,6 +9,7 @@ since a chunk grid has no way to say "this chunk decodes to more elements than i
 contributes".
 """
 
+import shutil
 from pathlib import Path
 from unittest import mock
 
@@ -98,6 +99,44 @@ def _read_back(var: xr.Variable, registry) -> np.ndarray:
     store = ManifestStore(group=ManifestGroup(arrays={"v": marr}), registry=registry)
     with xr.open_zarr(store, consolidated=False, zarr_format=3) as ds:
         return ds["v"].values
+
+
+def test_zarr_requires_a_chunk_to_decode_to_its_declared_shape(tmp_path):
+    """The assumption the rest of this module rests on.
+
+    zarr decodes a chunk and reshapes it to the shape the grid declares, with no
+    tolerance in either direction. Swapping one interior chunk for a compressed
+    blob that inflates to more elements than the grid declares makes the array
+    unreadable - and only once that chunk is actually fetched, so a store can stay
+    corrupt and unnoticed until something touches the wrong region.
+    """
+    store = tmp_path / "a.zarr"
+    arr = zarr.create_array(
+        str(store),
+        shape=(550,),
+        chunks=(200,),
+        dtype=DTYPE,
+        compressors=zarr.codecs.ZstdCodec(),
+    )
+    arr[:] = np.arange(550)
+
+    # a compressed blob that decodes to 300 elements rather than the declared 200
+    donor = tmp_path / "donor.zarr"
+    donor_arr = zarr.create_array(
+        str(donor),
+        shape=(300,),
+        chunks=(300,),
+        dtype=DTYPE,
+        compressors=zarr.codecs.ZstdCodec(),
+    )
+    donor_arr[:] = np.arange(1000, 1300)
+    shutil.copyfile(donor / "c" / "0", store / "c" / "1")
+
+    reopened = zarr.open_array(str(store), mode="r")
+    # chunk 0 is untouched, so that region still reads back correctly
+    np.testing.assert_array_equal(reopened[0:200], np.arange(200, dtype=DTYPE))
+    with pytest.raises(ValueError, match="cannot reshape array of size 300"):
+        reopened[:]
 
 
 def test_boundary_chunk_is_stored_padded(writer, tmp_path, local_registry):
