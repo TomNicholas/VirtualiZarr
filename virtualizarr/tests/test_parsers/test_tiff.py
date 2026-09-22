@@ -8,7 +8,9 @@ from xarray import Dataset, DataTree
 from virtualizarr import open_virtual_dataset, open_virtual_datatree
 
 try:
-    from zarr.core.metadata.v3 import RectilinearChunkGrid  # noqa: F401
+    from zarr.core.metadata.v3 import (  # noqa: F401
+        RectilinearChunkGridMetadata as RectilinearChunkGrid,
+    )
 
     has_rectilinear_chunk_grid_support = True
 except ImportError:
@@ -56,6 +58,14 @@ def test_virtual_tiff_dataset() -> None:
 @pytest.mark.skipif(
     not has_rectilinear_chunk_grid_support,
     reason="requires zarr with RectilinearChunkGrid support",
+)
+@pytest.mark.xfail(
+    raises=ValueError,
+    reason=(
+        "virtual_tiff rejects a TIFF whose image height isn't divisible by its "
+        "rows per strip rather than emitting a rectilinear chunk grid, see "
+        "https://github.com/developmentseed/virtual-tiff/issues/24"
+    ),
 )
 def test_concat_rectilinear_tiff_datasets(tmp_path) -> None:
     """Test concatenating two virtual TIFF datasets with rectilinear chunk grids.
